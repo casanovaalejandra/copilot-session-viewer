@@ -1165,8 +1165,16 @@ def api_open_file():
     if not path:
         return jsonify({"ok": False, "error": "No path provided"}), 400
 
-    # If the file exists, reveal it; otherwise open its parent directory
-    target = path if os.path.exists(path) else os.path.dirname(path)
+    # If the file exists, reveal it; otherwise walk up to nearest existing parent
+    if os.path.exists(path):
+        target = path
+    else:
+        target = os.path.dirname(path)
+        while target and not os.path.exists(target):
+            parent = os.path.dirname(target)
+            if parent == target:
+                break
+            target = parent
     if not os.path.exists(target):
         return jsonify({"ok": False, "error": f"Path not found: {path}"}), 404
 
