@@ -2,7 +2,7 @@
 
 A retro terminal-style web app to browse, search, and manage your GitHub Copilot CLI conversation history — with AI-powered titles and summaries.
 
-![Python](https://img.shields.io/badge/Python-3.10+-green) ![Flask](https://img.shields.io/badge/Flask-3.x-blue) ![Copilot SDK](https://img.shields.io/badge/Copilot_SDK-✨-purple)
+![Python](https://img.shields.io/badge/Python-3.11+-green) ![Flask](https://img.shields.io/badge/Flask-3.x-blue) ![Copilot SDK](https://img.shields.io/badge/Copilot_SDK-✨-purple)
 
 ## Quick Start
 
@@ -32,7 +32,7 @@ pip install uv
 git clone https://github.com/chonchiog/copilot-session-viewer.git
 cd copilot-session-viewer
 uv run --native-tls python app.py
-# Open http://localhost:5050
+# Open http://localhost:5051
 ```
 
 **Windows (PowerShell):**
@@ -40,7 +40,7 @@ uv run --native-tls python app.py
 git clone https://github.com/chonchiog/copilot-session-viewer.git
 cd copilot-session-viewer
 uv run python app.py
-# Open http://localhost:5050
+# Open http://localhost:5051
 ```
 
 ### 3. (Optional) Custom hostname
@@ -51,7 +51,7 @@ echo "127.0.0.1 copilot.local" | sudo tee -a /etc/hosts
 # Windows (run PowerShell as Admin)
 Add-Content C:\Windows\System32\drivers\etc\hosts "127.0.0.1 copilot.local"
 
-# Then visit http://copilot.local:5050
+# Then visit http://copilot.local:5051
 ```
 
 ## Prerequisites
@@ -70,7 +70,7 @@ Add-Content C:\Windows\System32\drivers\etc\hosts "127.0.0.1 copilot.local"
 - **📝 AI summaries** — generate a quick summary popup of any conversation
 - **✏️ Rename** — click the pencil to rename any session
 - **▸ Resume** — open a terminal and resume the conversation with `copilot --resume`
-- **📂 Files touched** — popup panel showing all files created/edited, click to open in Finder/Explorer
+- **📂 Files touched** — inline panel showing all files created/edited, click to open in Finder/Explorer
 - **Conversation viewer** — full chat history with markdown rendering and syntax highlighting
 - **📄 Export** — download any session as a Markdown file
 - **🗑 Delete** — remove sessions you no longer need
@@ -96,6 +96,7 @@ This keeps your session list clean. Your real conversations and AI-generated tit
 |---|---|---|
 | `COPILOT_DB` | Auto-detected | Path to `session-store.db` |
 | `TLDR_MODEL` | `claude-sonnet-4.5` | Model for AI title/summary generation |
+| `PORT` | `5051` | HTTP port to listen on |
 
 The app auto-detects your Copilot data directory:
 - **Mac/Linux**: `~/.copilot/session-store.db`
