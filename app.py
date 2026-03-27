@@ -87,6 +87,7 @@ _tldr_cache = load_tldr_cache()
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
+import shutil
 
 def get_db(readonly=True):
     uri = f"file:{DB_PATH}" + ("?mode=ro" if readonly else "")
@@ -95,7 +96,28 @@ def get_db(readonly=True):
     return conn
 
 
-# ── Cleanup SDK-generated junk sessions on startup ─────────────────────────
+# ── Cleanup SDK-generated junk sessions ────────────────────────────────────
+
+def _cleanup_sdk_junk(existing_ids):
+    """Remove sessions created by SDK calls (TLDR/summary generation)."""
+    try:
+        db = get_db(readonly=False)
+        current_ids = {r["id"] for r in db.execute("SELECT id FROM sessions").fetchall()}
+        new_ids = current_ids - existing_ids
+        for sid in new_ids:
+            db.execute("DELETE FROM turns WHERE session_id = ?", (sid,))
+            db.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+            # Clean up session-state directory on disk
+            state_dir = os.path.join(_base, "session-state", sid)
+            if os.path.isdir(state_dir):
+                shutil.rmtree(state_dir, ignore_errors=True)
+        if new_ids:
+            db.commit()
+            print(f"\U0001f9f9 Cleaned {len(new_ids)} SDK-generated sessions")
+        db.close()
+    except Exception:
+        pass
+
 
 def _cleanup_sdk_sessions():
     try:
@@ -172,6 +194,15 @@ def generate_tldr(session_id):
     )
     prompt = f"Give this conversation a short title:\n\n{transcript}"
 
+    # Snapshot existing session IDs so we can clean up SDK-created junk afterward
+    existing_ids = set()
+    try:
+        db = get_db()
+        existing_ids = {r["id"] for r in db.execute("SELECT id FROM sessions").fetchall()}
+        db.close()
+    except Exception:
+        pass
+
     async def _call():
         session = await _copilot_client.create_session(
             {
@@ -187,7 +218,9 @@ def generate_tldr(session_id):
             )
             return response.data.content if response else None
 
-    return _run_async(_call())
+    result = _run_async(_call())
+    _cleanup_sdk_junk(existing_ids)
+    return result
 
 
 # ── HTML ───────────────────────────────────────────────────────────────────
@@ -1132,6 +1165,15 @@ def api_summary(session_id):
     )
     prompt = f"Summarize this session:\n\n{transcript}"
 
+    # Snapshot existing session IDs so we can clean up SDK-created junk afterward
+    existing_ids = set()
+    try:
+        sdb = get_db()
+        existing_ids = {r["id"] for r in sdb.execute("SELECT id FROM sessions").fetchall()}
+        sdb.close()
+    except Exception:
+        pass
+
     try:
         async def _call():
             session = await _copilot_client.create_session(
@@ -1149,6 +1191,7 @@ def api_summary(session_id):
                 return response.data.content if response else None
 
         summary = _run_async(_call())
+        _cleanup_sdk_junk(existing_ids)
         if summary:
             return jsonify({"ok": True, "summary": summary})
         return jsonify({"ok": False, "error": "No response from AI"}), 500
