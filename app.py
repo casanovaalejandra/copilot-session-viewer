@@ -18,7 +18,7 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 VERSION = "1.0.0"
-REPO = "chonchiog/copilot-session-viewer"
+REPO = "casanovaalejandra/copilot-session-viewer"
 MODEL = os.environ.get("TLDR_MODEL", "claude-sonnet-4.5")
 
 # Auto-detect Copilot data dir across platforms
@@ -98,22 +98,31 @@ def get_db(readonly=True):
 
 # ── Cleanup SDK-generated junk sessions ────────────────────────────────────
 
-def _cleanup_sdk_junk(existing_ids):
-    """Remove sessions created by SDK calls (TLDR/summary generation)."""
+def _cleanup_sdk_junk():
+    """Remove junk sessions created by SDK calls (TLDR/summary generation)."""
     try:
         db = get_db(readonly=False)
-        current_ids = {r["id"] for r in db.execute("SELECT id FROM sessions").fetchall()}
-        new_ids = current_ids - existing_ids
-        for sid in new_ids:
-            db.execute("DELETE FROM turns WHERE session_id = ?", (sid,))
-            db.execute("DELETE FROM sessions WHERE id = ?", (sid,))
-            # Clean up session-state directory on disk
-            state_dir = os.path.join(_base, "session-state", sid)
-            if os.path.isdir(state_dir):
-                shutil.rmtree(state_dir, ignore_errors=True)
-        if new_ids:
+        junk = db.execute("""
+            SELECT s.id FROM sessions s
+            WHERE (SELECT COUNT(*) FROM turns t WHERE t.session_id = s.id) = 0
+               OR ((SELECT COUNT(*) FROM turns t WHERE t.session_id = s.id) <= 1
+                   AND ((SELECT t.user_message FROM turns t WHERE t.session_id = s.id AND t.turn_index = 0)
+                        LIKE 'Summarize this conversation%'
+                     OR (SELECT t.user_message FROM turns t WHERE t.session_id = s.id AND t.turn_index = 0)
+                        LIKE 'Give this conversation%'
+                     OR (SELECT t.user_message FROM turns t WHERE t.session_id = s.id AND t.turn_index = 0)
+                        LIKE 'Summarize this session%'))
+        """).fetchall()
+        if junk:
+            for row in junk:
+                sid = row["id"]
+                db.execute("DELETE FROM turns WHERE session_id = ?", (sid,))
+                db.execute("DELETE FROM sessions WHERE id = ?", (sid,))
+                state_dir = os.path.join(_base, "session-state", sid)
+                if os.path.isdir(state_dir):
+                    shutil.rmtree(state_dir, ignore_errors=True)
             db.commit()
-            print(f"\U0001f9f9 Cleaned {len(new_ids)} SDK-generated sessions")
+            print(f"\U0001f9f9 Cleaned {len(junk)} SDK-generated junk sessions")
         db.close()
     except Exception:
         pass
@@ -145,7 +154,9 @@ def _cleanup_sdk_sessions():
     except Exception:
         pass
 
-_cleanup_sdk_sessions()
+# NOTE: Startup cleanup removed — it was deleting the SDK's own internal session
+# (which has 0 turns), breaking subsequent SDK calls with [Errno 22].
+# Junk sessions are now cleaned up after each TLDR/summary call via _cleanup_sdk_junk().
 
 
 def time_ago(iso_str):
@@ -194,15 +205,6 @@ def generate_tldr(session_id):
     )
     prompt = f"Give this conversation a short title:\n\n{transcript}"
 
-    # Snapshot existing session IDs so we can clean up SDK-created junk afterward
-    existing_ids = set()
-    try:
-        db = get_db()
-        existing_ids = {r["id"] for r in db.execute("SELECT id FROM sessions").fetchall()}
-        db.close()
-    except Exception:
-        pass
-
     async def _call():
         session = await _copilot_client.create_session(
             {
@@ -219,7 +221,7 @@ def generate_tldr(session_id):
             return response.data.content if response else None
 
     result = _run_async(_call())
-    _cleanup_sdk_junk(existing_ids)
+    _cleanup_sdk_junk()
     return result
 
 
@@ -959,6 +961,26 @@ def index():
     return HTML
 
 
+@app.route("/api/debug-sdk")
+def api_debug_sdk_top():
+    import traceback as tb
+    try:
+        async def _call():
+            session = await _copilot_client.create_session({
+                "model": MODEL,
+                "system_message": {"mode": "replace", "content": "Say hi"},
+                "available_tools": [],
+                "on_permission_request": PermissionHandler.approve_all,
+            })
+            async with session:
+                response = await session.send_and_wait({"prompt": "hello"}, timeout=30)
+                return response.data.content if response else None
+        result = _run_async(_call())
+        return jsonify({"ok": True, "result": result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "traceback": tb.format_exc()}), 500
+
+
 @app.route("/api/version")
 def api_version():
     """Check for updates against GitHub releases."""
@@ -1165,15 +1187,6 @@ def api_summary(session_id):
     )
     prompt = f"Summarize this session:\n\n{transcript}"
 
-    # Snapshot existing session IDs so we can clean up SDK-created junk afterward
-    existing_ids = set()
-    try:
-        sdb = get_db()
-        existing_ids = {r["id"] for r in sdb.execute("SELECT id FROM sessions").fetchall()}
-        sdb.close()
-    except Exception:
-        pass
-
     try:
         async def _call():
             session = await _copilot_client.create_session(
@@ -1191,7 +1204,7 @@ def api_summary(session_id):
                 return response.data.content if response else None
 
         summary = _run_async(_call())
-        _cleanup_sdk_junk(existing_ids)
+        _cleanup_sdk_junk()
         if summary:
             return jsonify({"ok": True, "summary": summary})
         return jsonify({"ok": False, "error": "No response from AI"}), 500

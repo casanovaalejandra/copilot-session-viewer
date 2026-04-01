@@ -29,7 +29,7 @@ pip install uv
 
 **Mac/Linux:**
 ```bash
-git clone https://github.com/chonchiog/copilot-session-viewer.git
+git clone https://github.com/casanovaalejandra/copilot-session-viewer.git
 cd copilot-session-viewer
 uv run --native-tls python app.py
 # Open http://localhost:5051
@@ -37,7 +37,7 @@ uv run --native-tls python app.py
 
 **Windows (PowerShell):**
 ```powershell
-git clone https://github.com/chonchiog/copilot-session-viewer.git
+git clone https://github.com/casanovaalejandra/copilot-session-viewer.git
 cd copilot-session-viewer
 uv run python app.py
 # Open http://localhost:5051
