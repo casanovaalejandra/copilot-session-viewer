@@ -90,9 +90,10 @@ _tldr_cache = load_tldr_cache()
 import shutil
 
 def get_db(readonly=True):
-    uri = f"file:{DB_PATH}" + ("?mode=ro" if readonly else "")
-    conn = sqlite3.connect(uri, uri=True)
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    if readonly:
+        conn.execute("PRAGMA query_only = ON")
     return conn
 
 
@@ -596,7 +597,7 @@ async function openSession(id) {
             <button class="btn btn-green" id="filesBtn" style="display:none" onclick="showFilesPanel()">📂 FILES TOUCHED</button>
             <button class="btn" onclick="exportMd('${s.id}')">📄 EXPORT</button>
             <button class="btn" onclick="copyTldr('${s.id}')">📋 COPY</button>
-            <button class="btn btn-danger" onclick="askDelete('${s.id}','${esc(s.tldr)}')">✕ DELETE</button>
+            <button class="btn btn-danger" onclick="askDelete('${s.id}')">✕ DELETE</button>
           </div>
         </div>
         <div id="filesPanel"></div>
@@ -881,9 +882,10 @@ function copyTldr(id) {
 }
 
 // ── Delete ──
-function askDelete(id, tldr) {
+function askDelete(id) {
   deleteId = id;
-  document.getElementById('deleteInfo').textContent = 'Session: "' + tldr + '"';
+  const s = sessions.find(x => x.id === id);
+  document.getElementById('deleteInfo').textContent = 'Session: "' + (s ? s.tldr : id) + '"';
   document.getElementById('deleteModal').classList.add('active');
 }
 function closeModal() {
@@ -947,6 +949,11 @@ async function init() {
   } catch(e) {}
 }
 init();
+
+// Auto-refresh session list every 10 seconds when on list view
+setInterval(() => {
+  if (currentView === 'list') load();
+}, 10000);
 </script>
 </body>
 </html>
