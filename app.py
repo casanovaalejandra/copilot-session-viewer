@@ -88,6 +88,7 @@ _tldr_cache = load_tldr_cache()
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 import shutil
+import subprocess as _sp
 
 def get_db(readonly=True):
     conn = sqlite3.connect(DB_PATH)
@@ -95,6 +96,22 @@ def get_db(readonly=True):
     if readonly:
         conn.execute("PRAGMA query_only = ON")
     return conn
+
+
+def _detect_branch(cwd):
+    """Detect the git branch for a working directory."""
+    if not cwd or not os.path.isdir(cwd):
+        return None
+    try:
+        result = _sp.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=cwd, capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or None
+    except Exception:
+        pass
+    return None
 
 
 # ── Cleanup SDK-generated junk sessions ────────────────────────────────────
@@ -389,6 +406,9 @@ body{font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--tex
 .file-name{font-size:12px;color:var(--text);font-weight:500}
 .file-path{font-size:10px;color:var(--text-faint);margin-left:auto;overflow:hidden;
   text-overflow:ellipsis;white-space:nowrap;max-width:300px}
+.branch-editable{cursor:pointer;transition:.15s}
+.branch-editable:hover{color:var(--green)}
+.branch-editable:hover .edit-icon{opacity:1}
 
 /* ── Modal ── */
 .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;
@@ -547,6 +567,7 @@ function renderList() {
       <div class="title ${s.has_ai_tldr ? '' : 'dim'}">${esc(s.tldr)} <span class="edit-inline" onclick="event.stopPropagation();renameFromList('${s.id}')" title="Rename">✏️</span></div>
       <div class="meta">
         <span class="tag ${s.turn_count ? 'tag-turns' : 'tag-empty'}">${s.turn_count} msgs</span>
+        ${s.branch ? '<span class="tag tag-turns" style="background:rgba(0,230,118,.08);color:var(--green);border-color:rgba(0,230,118,.2)">🌿 '+esc(s.branch)+'</span>' : ''}
         <span class="tag-time">${esc(s.time_ago)}</span>
         <span class="tag-date">${esc(s.created_at_short)}</span>
         <div class="row-actions" onclick="event.stopPropagation()">
@@ -585,6 +606,7 @@ async function openSession(id) {
               <span>🕐 ${esc(s.created_at_short)}</span>
               <span>${esc(s.time_ago)}</span>
               ${s.cwd ? '<span>📁 <code>'+esc(s.cwd)+'</code></span>' : ''}
+              <span id="branchDisplay" class="branch-editable" onclick="editBranch('${s.id}')" title="Click to edit branch">🌿 <code>${s.branch ? esc(s.branch) : 'no branch'}</code> <span class="edit-icon">✏️</span></span>
               <span class="tag tag-turns">${s.turn_count} msgs</span>
             </div>
           </div>
@@ -675,6 +697,43 @@ function backToList() {
   history.pushState({view:'list'}, '', '#');
   load();
   window.scrollTo(0, 0);
+}
+
+// ── Edit Branch ──
+function editBranch(id) {
+  const s = sessions.find(x => x.id === id);
+  const el = document.getElementById('branchDisplay');
+  el.innerHTML = `<input class="title-input" id="branchInput" value="${esc(s.branch || '')}"
+    placeholder="branch name"
+    style="font-size:11px;padding:2px 6px;width:200px"
+    onkeydown="if(event.key==='Enter')saveBranch('${id}');if(event.key==='Escape')cancelBranchEdit('${id}')"
+    onblur="saveBranch('${id}')">`;
+  const inp = document.getElementById('branchInput');
+  inp.focus();
+  inp.select();
+}
+
+async function saveBranch(id) {
+  const inp = document.getElementById('branchInput');
+  if (!inp) return;
+  const branch = inp.value.trim();
+  if (!branch) { cancelBranchEdit(id); return; }
+  const s = sessions.find(x => x.id === id);
+  await fetch('/api/sessions/' + id + '/branch', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({branch})
+  });
+  if (s) s.branch = branch;
+  const el = document.getElementById('branchDisplay');
+  if (el) el.innerHTML = '🌿 <code>' + esc(branch) + '</code> <span class="edit-icon">✏️</span>';
+  toast('🌿 Branch saved');
+}
+
+function cancelBranchEdit(id) {
+  const s = sessions.find(x => x.id === id);
+  const el = document.getElementById('branchDisplay');
+  if (el) el.innerHTML = '🌿 <code>' + esc(s.branch || 'no branch') + '</code> <span class="edit-icon">✏️</span>';
 }
 
 // ── Rename Title ──
@@ -1102,6 +1161,18 @@ def api_sessions():
                 continue
         d["has_ai_tldr"] = has_ai
         d["time_ago"] = time_ago(d["created_at"])
+        # Detect branch from cwd and store permanently on first sight
+        if not d.get("branch") and d.get("cwd"):
+            branch = _detect_branch(d["cwd"])
+            if branch:
+                d["branch"] = branch
+                try:
+                    wdb = get_db(readonly=False)
+                    wdb.execute("UPDATE sessions SET branch = ? WHERE id = ?", (branch, d["id"]))
+                    wdb.commit()
+                    wdb.close()
+                except Exception:
+                    pass
         try:
             dt = datetime.fromisoformat(d["created_at"].replace("Z", "+00:00"))
             d["created_at_short"] = dt.strftime("%b %d, %H:%M")
@@ -1140,6 +1211,23 @@ def api_files(session_id):
     ).fetchall()
     db.close()
     return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/sessions/<session_id>/branch", methods=["PUT"])
+def api_set_branch(session_id):
+    """Manually set/update the branch for a session."""
+    data = request.get_json()
+    branch = data.get("branch", "").strip()
+    if not branch:
+        return jsonify({"ok": False, "error": "Empty branch"}), 400
+    try:
+        db = get_db(readonly=False)
+        db.execute("UPDATE sessions SET branch = ? WHERE id = ?", (branch, session_id))
+        db.commit()
+        db.close()
+        return jsonify({"ok": True, "branch": branch})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/sessions/<session_id>/tldr", methods=["POST"])
